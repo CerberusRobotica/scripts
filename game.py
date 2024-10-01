@@ -440,7 +440,7 @@ def girar(id, goal, tolerancia):
     # goal: Para que ponto ele deve olhar? vetor[1]
     # tolerancia: Qual a tolerancia em radianos para o alinhamento? float
     salvar_bola()
-
+    orientacao = 0
     delta = 0
     KP_ang = 5
 
@@ -472,17 +472,16 @@ def girar(id, goal, tolerancia):
     pub[id].publish(ssl_msg[id])
 
 
-def move(id, goal: tuple, evitarbola, alpha, charlie=250, ignorar=0) -> None:
+def move(id, goal: tuple, evitarbola, alpha, charlie=250, ignorar=0, considerararea = 1) -> None:
     # Qual robo se movimentara? int
     # Para onde ele deve ir? vetor[1]
     # Ele deve manter distacia da bola? 0/1
     # Velocidade float
     global vel
-
+    if considerararea:
+        goal = verificardestino(id, goal, not considerararea)
     if alpha > v_max:
         alpha = v_max
-    if alpha < v_min:
-        alpha = v_min
 
     beta = betab  # distancia entre o robo e os obstaculos
     pos = removerrobo(id, id)
@@ -499,11 +498,10 @@ def move(id, goal: tuple, evitarbola, alpha, charlie=250, ignorar=0) -> None:
         pos["xr" + str(i)] = p_bola[0]
         pos["yr" + str(i)] = p_bola[1]
         betav.append(charlie)
-
-    print(goal)
     a = movetoskill.skill(jogador_aliado[id].x, jogador_aliado[id].y, goal[0], goal[1], pos, betav, alpha)
+    a = verificardestino(id, a + np.array((jogador_aliado[id].x, jogador_aliado[id].y)), not considerararea)
+    a = VetOp.normalizar(alpha , a - np.array((jogador_aliado[id].x, jogador_aliado[id].y)))
     ang = jogador_aliado[id].orientation
-
 
     if isBoolean(a):
         a = (-goal[0] + jogador_aliado[id].x, -goal[1] + jogador_aliado[id].y)
@@ -530,26 +528,35 @@ def ataque_jog(id: int):  #####move o jogador id ate a bola, mantendo o olhar ne
         pub[id].publish(ssl_msg[id])
 
 
-def AlinharcomTatica(id, id2, start, goal, ang = 0, dist = 150, ignorar = 0):
+def AlinharcomTatica(id, id2, start, goal, ang = 0, dist = 150, ignorar = 0, considerararea = 1):
     salvar_bola()
 
     posicao = np.array((jogador_aliado[id].x, jogador_aliado[id].y))
-
-    v = verificardestino(id, posicaochute(id, id2, goal, start, ang, dist))
-
+    v = verificardestino(id, posicaochute(id, id2, goal, start, ang, dist, considerararea), not considerararea)
     girar(id, p_bola, 0.05)
 
     alpha = velocidadepdist(posicao[0], posicao[1], v[0], v[1])
-    # print("tatica")
-    if not alinhado(np.array(start) - v, (start[0] - posicao[0], start[1] - posicao[1]), 0.2):
-        move(id, (v[0], v[1]), 1, alpha, 200, ignorar)
+    if not alinhado(np.array(start) - v, (start[0] - posicao[0], start[1] - posicao[1]), 0.15):
+        move(id, (v[0], v[1]), 1, alpha, 200, ignorar, considerararea)
         return False
     else:
         return True
 
+def temomaisproximo(goal = p_bola):
+    distancias = []
+    for i in range(num_jogadores):
+        distancias.append(np.sqrt((jogador_aliado[i].x - goal[0])**2 + (jogador_aliado[i].y - goal[1])**2))
+    for i in range(num_jogadores):
+        distancias.append(np.sqrt((jogador_inimigo[i].x - goal[0])**2 + (jogador_inimigo[i].y - goal[1])**2))
+    id = 0
+    for i in range(1, len(distancias)):
+        if distancias[i] < distancias[id]:
+            id = i
+    if id < 3:
+        return "nos"
+    return "eles"
 
 def alinhado(u, v, tolerancia):
-    # print(VetOp.angulovetores(u, v))
     if VetOp.angulovetores(u, v) <= tolerancia:
         return True
     return False
@@ -558,7 +565,6 @@ def alinhado(u, v, tolerancia):
 def velocidadepdist(x0, y0, xf, yf, modf = 1):
     # return np.sqrt((xf - x0) ** 2 + (yf - y0) ** 2) / 2828 * v_max
     # vel = (1 / (1 + np.exp(-(np.sqrt((xf - x0) ** 2 + (yf - y0) ** 2)/1000) + 0.3))) * v_max
-    # print(vel)
     k = np.sqrt((xf - x0) ** 2 + (yf - y0) ** 2)
     if k < 200:
         return (1 / (1 + np.exp(-(np.sqrt((xf - x0) ** 2 + (yf - y0) ** 2) / 1000*modf)))) * v_max
@@ -569,14 +575,15 @@ def chutar(id):
     salvar_bola()
 
     girar(id, (p_bola[0], p_bola[1]), 0.05)
-    move(id, (p_bola[0], p_bola[1]), 0, v_max, 0, 1)
+    move(id, (p_bola[0], p_bola[1]), 0, v_max, 0, 1, not id == getgoleiro("nosso"))
 
     if abs(jogador_aliado[id].x - p_bola[0]) < 150 and abs(jogador_aliado[id].y - p_bola[1]) < 150:
         ssl_msg[id].kicker = True
         pub[id].publish(ssl_msg[id])
         ssl_msg[id].kicker = False
         pub[id].publish(ssl_msg[id])
-        if np.linalg.norm(velocidadebola) > 200*v_max:
+        if np.linalg.norm(velocidadebola) > 100*v_max:
+            parada(id)
             return True
 
     return False
@@ -590,18 +597,14 @@ def DecidirPlay():
     global play
 
     if not playstuck:
-        if time == "yellow":
-            if p_bola[0] > 0:
-                play = "defesa"
-            else:
-                play = "ataque"
+        if temomaisproximo() == "nos":
+            play = "ataque"
         else:
-            if p_bola[0] < 0:
-                play = "defesa"
-            else:
-                play = "ataque"
+            play = "defesa"
 
     if play != playcache:
+        print(play)
+        print(temomaisproximo())
         playcache = play
         playsetup = True
 
@@ -654,7 +657,7 @@ def PlayDefesa():
 
     Interrole(idinter, idatac)
     Marcarrole(idmarca, idpasse)
-    Goleirorole(idgoleironosso)
+    Goleirorole(idgoleironosso, idinter)
 
 
 def Marcarrole(idmarca, idpasse):
@@ -687,7 +690,7 @@ def Interrole(idinter, idatac):
             return False
 
 
-def Goleirorole(idgoleiro):
+def Goleirorole(idgoleiro, id):
     idatac = 0
     for i in range(1, num_jogadores):
         if np.sqrt((jogador_inimigo[i].x - p_bola[0])**2 + (jogador_inimigo[i].y- p_bola[1])**2) < np.sqrt((jogador_inimigo[idatac].x - p_bola[0])**2 + (jogador_inimigo[idatac].y- p_bola[1])**2):
@@ -704,11 +707,16 @@ def Goleirorole(idgoleiro):
         encontro = golnosso[1]
     if encontro > golnosso[2]:
         encontro = golnosso[2]
-    v = verificardestino(idgoleiro, (golnosso[0], encontro))
-    if np.sqrt((jogador_aliado[idgoleiro].x - p_bola[0])**2 + (jogador_aliado[idgoleiro].y- p_bola[1])**2) < 200:
+    v = verificardestino(idgoleiro, (golnosso[0], encontro), 1)
+
+    if dentrodaarea(p_bola) and np.linalg.norm(velocidadebola) < 200:
+        if AlinharcomTatica(idgoleiro, id, p_bola, (jogador_aliado[id].x, jogador_aliado[id].y), 0, 150, 1, 0):
+            if not chutar(idgoleiro):
+                chutar(idgoleiro)
+    elif np.sqrt((jogador_aliado[idgoleiro].x - p_bola[0])**2 + (jogador_aliado[idgoleiro].y- p_bola[1])**2) < 300:
         chutar(idgoleiro)
     else:
-        move(idgoleiro, (v[0], v[1]), 0, velocidadepdist(jogador_aliado[idgoleiro].x, jogador_aliado[idgoleiro].y, v[0], v[1]), 150, 1)
+        move(idgoleiro, (v[0], v[1]), 0, velocidadepdist(jogador_aliado[idgoleiro].x, jogador_aliado[idgoleiro].y, v[0], v[1]), 150, 1, 0)
     girar(idgoleiro, p_bola, 0.05)
 
 
@@ -740,33 +748,49 @@ def PlayAtaque():
 
     if not playsetup:
         Pegarpasserole(id1, id0)
-        Goleirorole(idgoleironosso)
+        Goleirorole(idgoleironosso, id0)
         if Atacanterole(id0, id1):
+            print("AAAAAAAAAAAAAAAAAAAAAAAAAAA")
+            Interceptarrole(id1)
             temptempoplay = t + 0.5
-            idt = id1
-            id1 = id0
-            id0 = idt
 
 
 
 def Pegarpasserole(id2, id):
-    distkicker = 1400
+    if preso[id2] == True:
+        parada(id2)
+        return
+    distkicker = 1600
+    distancia_bola = 0
     posicao0 = verificardestino(id, posicaochute(id, id2, (goldeles[0], 0), p_bola))
     posicaof = VetOp.normalizar(distkicker, np.array((p_bola[0], p_bola[1])) - posicao0)
     posicaof = posicaof + posicao0
 
+    beta = []
+    for i in range(int(len(removerrobo(id, id2))/2)):
+        beta.append(betab)
 
-    ang = np.arctan(100/distkicker)
+    if movetoskill.testarcolisoes(p_bola[0], p_bola[1], np.array((goldeles[0] - p_bola[0], goldeles[1] - p_bola[1])), removerrobo(id, id2), beta):
+        print("tacolidindo")
+        print((goldeles[0] - p_bola[0], goldeles[1] - p_bola[1]))
+        print(goldeles)
+        print(p_bola)
+        distancia_bola = 1000000000
+    else:
+        print("nao ta colidindo")
+        print((goldeles[0] - p_bola[0], goldeles[1] - p_bola[1]))
+        print(goldeles)
+        print(p_bola)
+    ang = np.arctan(distancia_bola/distkicker)
     posicaof1 = ((posicaof[0] * np.cos(ang) + posicaof[1] * np.sin(ang)),
-         (-posicaof[0] * np.sin(ang) + posicaof[1] * np.cos(ang)))
+             (-posicaof[0] * np.sin(ang) + posicaof[1] * np.cos(ang)))
     posicaof2 = ((posicaof[0] * np.cos(-ang) + posicaof[1] * np.sin(-ang)),
-         (-posicaof[0] * np.sin(-ang) + posicaof[1] * np.cos(-ang)))
-    posicaof = posicaof2
+             (-posicaof[0] * np.sin(-ang) + posicaof[1] * np.cos(-ang)))
     if posicaof1[0]**2 + posicaof1[1]**2 > posicaof2[0]**2 + posicaof2[1]**2:
-        posicaof = posicaof1
+        ang = -ang
 
-
-    AlinharcomTatica(id2, id, posicaof, (goldeles[0], 0))
+    if AlinharcomTatica(id2, id, posicaof, (goldeles[0], 0), ang):
+        parada(id2)
 
 
 def Atacanterole(id, id2):
@@ -777,6 +801,14 @@ def Atacanterole(id, id2):
             chutar(id)
         else:
             return True
+    return False
+
+
+def Interceptarrole(id):
+    if np.sqrt((jogador_aliado[id].x - p_bola[0])**2 + (jogador_aliado[id].y - p_bola[1]**2)) < 200:
+        parada(id)
+        return True
+    move(id, p_bola, 0, velocidadepdist(jogador_aliado[id].x, jogador_aliado[id].y, p_bola[0], p_bola[1]))
     return False
 
 
@@ -801,7 +833,6 @@ def getgoleiro(desejo):  # retorna o id do goleiro inimigo
 
 
 def getposicoes():
-    # print(id)
     pos = {"xr0": 0}  # cria dicionario de obstaculos
     for i in range(num_jogadores):  # adicionam os obstaculos no dicionario
         pos["xr" + str(i)] = jogador_inimigo[i].x
@@ -811,9 +842,7 @@ def getposicoes():
         pos["yr" + str(i + num_jogadores)] = jogador_aliado[i].y
     return pos
 
-
 def removerrobo(id, id2):
-    # print(id)
     id = id + 3
     id2 = id2 + 3
     j = 0
@@ -824,64 +853,57 @@ def removerrobo(id, id2):
         posttemp["xr" + str(j)] = pos1["xr" + str(i)]
         posttemp["yr" + str(j)] = pos1["yr" + str(i)]
         j = j + 1
-    # print(posttemp)
     return posttemp
 
 # y =a*x + y0 -a*x0
 # x = (y - y0 + a*x0)/a
 
 
-def verificartrajetoria(id, goal):
+"""def verificartrajetoria(id, goal):
     v = (goal[0] - jogador_aliado[id].x, goal[1] - jogador_aliado[1])
-    if a*areanossa[0] + jogador_aliado[id].y -a*jogador_aliado[id].x
+    if a*areanossa[0] + jogador_aliado[id].y -a*jogador_aliado[id].x"""
 
-
-def verificardestino(id, goal):
-    pontos = []
-    goal = verificarcolisao(id, goal)
-    if goal[0] < areanossa[0] and goal[0] > areanossa[1] and goal[1] < areanossa[2] and goal[1] > areanossa[3]:
-        a = 10000000
-        print("colidiu na nossa")
-        if goal[0] != 0:
-            a = (goal[1]-jogador_aliado[id].y)/(goal[0]-jogador_aliado[id].x)
-
-        if not a*areanossa[0] + jogador_aliado[id].y -a*jogador_aliado[id].x > areanossa[0] or a*areanossa[0] + jogador_aliado[id].y -a*jogador_aliado[id].x < areanossa[1]:
-            pontos.append((areanossa[0], a*areanossa[0] + jogador_aliado[id].y -a*jogador_aliado[id].x))
-
-        if not a*areanossa[1] + jogador_aliado[id].y -a*jogador_aliado[id].x > areanossa[0] or a*areanossa[1] + jogador_aliado[id].y -a*jogador_aliado[id].x < areanossa[1]:
-            pontos.append((areanossa[1], a*areanossa[1] + jogador_aliado[id].y -a*jogador_aliado[id].x))
-
-        if not (areanossa[2] - jogador_aliado[id].y + a*jogador_aliado[id].x)/a > areanossa[2] or (areanossa[2] - jogador_aliado[id].y + a*jogador_aliado[id].x)/a > areanossa[3]:
-            pontos.append(((areanossa[2] - jogador_aliado[id].y + a*jogador_aliado[id].x)/a, areanossa[2]))
-        if not (areanossa[3] - jogador_aliado[id].y + a * jogador_aliado[id].x) / a > areanossa[2] or (areanossa[3] - jogador_aliado[id].y + a * jogador_aliado[id].x) / a > areanossa[3]:
-            pontos.append(((areanossa[3] - jogador_aliado[id].y + a * jogador_aliado[id].x) / a, areanossa[3]))
-    elif goal[0] < areadeles[0] and goal[0] > areadeles[1] and goal[1] < areadeles[2] and goal[1] > areadeles[3]:
-        a = 10000000
-        print("colidiu na deles")
-        if goal[0] != 0:
-            a = (goal[1] - jogador_aliado[id].y) / (goal[0] - jogador_aliado[id].x)
-
-        if not a * areadeles[0] + jogador_aliado[id].y - a * jogador_aliado[id].x > areadeles[0] or a * areadeles[0] + \
-                jogador_aliado[id].y - a * jogador_aliado[id].x < areadeles[1]:
-            pontos.append((areadeles[0], a * areadeles[0] + jogador_aliado[id].y - a * jogador_aliado[id].x))
-
-        if not a * areadeles[1] + jogador_aliado[id].y - a * jogador_aliado[id].x > areadeles[0] or a * areadeles[1] + \
-                jogador_aliado[id].y - a * jogador_aliado[id].x < areadeles[1]:
-            pontos.append((areadeles[1], a * areadeles[1] + jogador_aliado[id].y - a * jogador_aliado[id].x))
-
-        if not (areadeles[2] - jogador_aliado[id].y + a * jogador_aliado[id].x) / a > areadeles[2] or (
-                areadeles[2] - jogador_aliado[id].y + a * jogador_aliado[id].x) / a > areadeles[3]:
-            pontos.append(((areadeles[2] - jogador_aliado[id].y + a * jogador_aliado[id].x) / a, areadeles[2]))
-        if not (areadeles[3] - jogador_aliado[id].y + a * jogador_aliado[id].x) / a > areadeles[2] or (
-                areadeles[3] - jogador_aliado[id].y + a * jogador_aliado[id].x) / a > areadeles[3]:
-            pontos.append(((areadeles[3] - jogador_aliado[id].y + a * jogador_aliado[id].x) / a, areadeles[3]))
+def dentrodaarea(goal):
+    if time == "yellow":
+        if goal[0] > areaamarela[1] and goal[1] < areaamarela[2] and goal[1] > areaamarela[3]:
+            return True
     else:
+        if goal[0] < areaazul[0] and goal[1] < areaazul[2] and goal[1] > areaazul[3]:
+            return True
+    return False
+
+
+def verificardestino(id, goal, goleiro = 0):
+    pontos = []
+    if len(goal) == 2:
+        goal = verificarcolisao(id, goal)
+        if not goleiro:
+            if goal[0] > areaamarela[1] and goal[1] < areaamarela[2] and goal[1] > areaamarela[3]:
+                pontos.append((areaamarela[1], goal[1]))
+                pontos.append((goal[0], areaamarela[2]))
+                pontos.append((goal[0], areaamarela[3]))
+
+            elif goal[0] < areaazul[0] and goal[1] < areaazul[2] and goal[1] > areaazul[3]:
+                pontos.append((areaazul[0], goal[1]))
+                pontos.append((areaazul[0], goal[1]))
+                pontos.append((goal[0], areaazul[2]))
+                pontos.append((goal[0], areaazul[3]))
+            if not pontos == []:
+                ponto = pontos[0]
+                for i in range(1, len(pontos)):
+                   if np.sqrt((pontos[i][0] - goal[0]) ** 2 + (pontos[i][1] - goal[1]) ** 2) < np.sqrt((ponto[0] - goal[0]) ** 2 + (ponto[1] - goal[1]) ** 2):
+                        ponto = pontos[i]
+                goal = ponto
+        if goal[0] > limites[0]:
+            goal = (limites[0], goal[1])
+        if goal[0] < limites[1]:
+            goal = (limites[1], goal[1])
+        if goal[1] > limites[2]:
+            goal =(goal[0], limites[2])
+        if goal[1] < limites[3]:
+            goal = (goal[0], limites[3])
         return goal
-    ponto = pontos[0]
-    for i in range(1 ,len(pontos)):
-        if np.sqrt((pontos[i][0] - jogador_aliado[id].x)**2 + (pontos[i][1] - jogador_aliado[id].y)**2) < np.sqrt((ponto[0] - jogador_aliado[id].x)**2 + (ponto[1] - jogador_aliado[id].y)**2):
-            ponto = pontos[i]
-    return ponto
+
 
 
 def verificarcolisao(id, goal):
@@ -895,7 +917,7 @@ def verificarcolisao(id, goal):
     return goal
 
 
-def posicaochute(id, id2, goal, start = p_bola, ang = 0, dist = 150):
+def posicaochute(id, id2, goal, start = p_bola, ang = 0, dist = 100, considerararea = 1):
 
     salvar_bola()
     pos = removerrobo(id, id2)
@@ -911,7 +933,7 @@ def posicaochute(id, id2, goal, start = p_bola, ang = 0, dist = 150):
     v = np.array(((v[0] * np.cos(-ang) + v[1] * np.sin(-ang)),(-v[0] * np.sin(-ang) + v[1] * np.cos(-ang))))
 
     v = -v + np.array((start[0], start[1]))
-    v = verificardestino(id, v)
+    v = verificardestino(id, v, not considerararea)
     return v
 
 
@@ -1101,7 +1123,7 @@ def calcularvelocidades(id=0):
         j = j + 1
     #vel["vx" + str(int(len(vel)/2))] = abs((pos1["xr" + str(int(len(vel)/2)] - pos0["xr" + str(int(len(vel)/2)]) / (t1 - t0))
     #vel["vy" + str(int(len(vel)/2)] = abs((pos1["yr" + str(int(len(vel)/2)] - pos0["yr" + str(int(len(vel)/2)]) / (t1 - t0))
-    # print(vel)
+
 
 
 if __name__ == "__main__":
@@ -1116,10 +1138,8 @@ if __name__ == "__main__":
         for i in range(num_jogadores):
             topic = '/robot_yellow_{}/cmd'.format(i)
             pub[i] = rospy.Publisher(topic, SSL, queue_size=10)
-            golnosso = [2000, -500, 500]  # x, y0, yf
-            goldeles = [-2000, -500, 500]
-            areanossa = [2000, 1000, 1000, -1000]
-            areadeles = [-1000, -2000, 1000, -1000]
+            golnosso = [2250, -675, 675]  # x, y0, yf
+            goldeles = [-2250, -675, 675]
             jogador_aliado = jogador_yellow
             jogador_inimigo = jogador_blue
 
@@ -1127,12 +1147,14 @@ if __name__ == "__main__":
         for i in range(num_jogadores):
             topic = '/robot_blue_{}/cmd'.format(i)
             pub[i] = rospy.Publisher(topic, SSL, queue_size=10)
-            golnosso = [-2000, -500, 500]  # x, y0, yf
-            goldeles = [2000, -500, 500]
-            areanossa = [-1000, -2000, 1000, -1000]
-            areadeles = [2000, 1000, 1000, -1000]
+            golnosso = [-2250, -675, 675]  # x, y0, yf
+            goldeles = [2250, -675, 675]
             jogador_aliado = jogador_blue
             jogador_inimigo = jogador_yellow
+
+    areaamarela = [2250, 1750, 675, -675]
+    areaazul = [-1750, -2250, 675, -675]
+    limites = [2000, -2000, 2250, -2250]
 
     r = rospy.Rate(120)
 
@@ -1145,20 +1167,14 @@ if __name__ == "__main__":
             calcularposicoes()
             calcularvelocidadebola()
         if jogador_aliado[0].x == 0 and jogador_aliado[0].y == 0:
-            #print("iniciando")
             for i in range(3):
                 detectar(i)
         else:
-
-            """print("inicio")
-            print(jogador_aliado[1].x)
-            print(jogador_aliado[1].y)
-            #posicoes"""
             if t - temptempoplay > 0:
                 temptempoplay = t
+                preso = [False, False, False]
                 DecidirPlay()
             SelecionarPlay()
-
             # goleiro(0)
             # defensor_3(1)
             # Pegarpasse(0, 2)

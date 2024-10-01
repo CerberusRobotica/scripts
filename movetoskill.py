@@ -32,9 +32,7 @@ def pathfinding(x0, y0, xf, yf, pos, beta):
         xr = pos.get("xr" + str(i))
         yr = pos.get("yr" + str(i))
 
-        """if (np.sqrt((xr-x0)**2 + (yr-y0)**2) < beta):
-            print("Vish")
-            return VetOp.calcularvetor(xf, yf, x0, y0)"""
+
 
         vet = VetOp.calcularnovovetor(x0, y0, xr, yr, beta[i], 1)
         if not testarcolisoes(x0, y0, vet, pos, beta):
@@ -53,18 +51,13 @@ def pathfinding(x0, y0, xf, yf, pos, beta):
         if abs(angulosvet[i]) < abs(angulosvet[j]):
             j = i
     if len(vetores) == 0:
-        print("sem solucoes encontradas") #teoricamente impossivel durante o jogo
+        #print("sem solucoes encontradas") #teoricamente impossivel durante o jogo
         #return False
         return -vet
-    """print(vetores)
-    print(len(vetores))
-    print(j)"""
+
     #print(vetores)
     vet = vetores[j]
-    """if xf-x0 < 0:
-        vet = vet * np.array((-1,1))
-    if yf-y0 < 0:
-        vet = vet * np.array((1,-1))"""
+
     #print(vet)
     return vet
 

@@ -17,7 +17,8 @@ def skill(x0, y0, xf, yf, pos, beta, alpha):
         vet = pathfinding(x0, y0, xf, yf, pos, beta)
     if isBoolean(vet):
         return vet
-    vet = VetOp.normalizar(alpha, vet)
+    if alpha != -1:
+        vet = VetOp.normalizar(alpha, vet)
     return vet
 
 
